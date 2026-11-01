@@ -188,7 +188,7 @@ def compute_acoustic_biomarkers(audio_path, transcript=""):
         
         # Modern Neural TTS (ElevenLabs, OpenAI, VITS, Bark) Artifacts:
         # High spectral centroid brightness combined with disproportionate HF energy or high ZCR with studio rolloff
-        is_neural_tts = bool((sc > 2300 and hf_ratio > 0.35) or (zcr > 0.21 and rolloff > 3900))
+        is_neural_tts = bool((sc > 2200 and hf_ratio > 0.35) or (zcr > 0.20 and rolloff > 4200))
         
         # Below 2400 Hz indicates classical vocoder cutoff wall; >3000 Hz indicates natural harmonic extension
         rolloff_fake = 1.0 - min(1.0, max(0.0, (rolloff - 2200.0) / 1200.0))
@@ -212,23 +212,23 @@ def compute_acoustic_biomarkers(audio_path, transcript=""):
         # Check active vocal energy vs silence
         rms_val = float(np.sqrt(np.mean(y_trim**2))) if len(y_trim) > 0 else 0.0
         
-        # Vocoder cutoff only applies when there is loud voiced speech (silence/quiet pauses naturally have low rolloff)
-        is_vocoder_cutoff = bool(rolloff < 2400 and rms_val >= 0.015)
+        # Legacy vocoder cutoff: Only if both rolloff < 1600 AND sc < 950 with severe flatness collapse
+        is_vocoder_cutoff = bool(rolloff < 1600 and sc < 950 and flatness < 0.0005)
         
-        # Synthetic Vocoder Indicator: Vocoder cutoff during active speech, frozen pitch, AI demo prompt, or Modern Neural TTS
-        is_synthetic_vocoder = bool(is_vocoder_cutoff or (jitter < 0.075 and rms_val >= 0.015) or is_ai_prompt or is_neural_tts)
+        # Synthetic Vocoder Indicator: Vocoder cutoff, AI demo prompt, or Modern Neural TTS studio harmonics
+        is_synthetic_vocoder = bool(is_vocoder_cutoff or is_ai_prompt or is_neural_tts)
         
-        # Biological Human Voice Indicator: Natural vocal fold tremor and natural acoustic decay without synthetic boost
-        is_human_biology = bool(rolloff >= 2500 and jitter >= 0.08 and not is_synthetic_vocoder)
+        # Biological Human Voice Indicator: Natural vocal tract resonance without synthetic boost or brickwall cutoff
+        is_human_biology = bool(not is_synthetic_vocoder and sc <= 2100 and hf_ratio <= 0.32)
         
         if is_neural_tts:
-            biomarker_fake = max(0.78, 0.50 * min(1.0, sc / 2800.0) + 0.50 * min(1.0, hf_ratio / 0.40))
+            biomarker_fake = max(0.80, 0.50 * min(1.0, sc / 2800.0) + 0.50 * min(1.0, hf_ratio / 0.40))
         elif is_synthetic_vocoder:
             biomarker_fake = max(0.75, 0.55 * rolloff_fake + 0.45 * jitter_fake)
             if is_ai_prompt:
                 biomarker_fake = 0.95
         elif is_human_biology:
-            biomarker_fake = min(0.20, 0.50 * rolloff_fake + 0.50 * jitter_fake)
+            biomarker_fake = min(0.18, 0.50 * (sc / 2200.0) + 0.50 * (hf_ratio / 0.35))
         else:
             biomarker_fake = 0.50 * rolloff_fake + 0.50 * jitter_fake
         
@@ -484,26 +484,32 @@ def sentinel_stream_chunk():
             rms = float(np.sqrt(np.mean(y_chunk**2))) if len(y_chunk) > 0 else 0.0
             peak = float(np.max(np.abs(y_chunk))) if len(y_chunk) > 0 else 0.0
             
-            # Maintain 5.0-second rolling buffer per session for rock-solid temporal stability
+            # Maintain 3.6-second rolling buffer per session for ultra-responsive temporal stability
             now = time.time()
-            sess_key = request.remote_addr or 'default'
+            sess_key = request.form.get('session_id') or request.remote_addr or 'default'
+            is_reset = request.form.get('reset') == 'true'
             
-            if sess_key not in sentinel_buffer_timestamps or (now - sentinel_buffer_timestamps[sess_key]) > 7.0:
+            if is_reset or sess_key not in sentinel_buffer_timestamps or (now - sentinel_buffer_timestamps[sess_key]) > 4.5:
                 sentinel_rolling_buffers[sess_key] = np.array([], dtype=np.float32)
             sentinel_buffer_timestamps[sess_key] = now
             
             buf = sentinel_rolling_buffers.get(sess_key, np.array([], dtype=np.float32))
             buf = np.concatenate([buf, y_chunk])
-            if len(buf) > 80000:  # 5.0 seconds at 16kHz
-                buf = buf[-80000:]
+            if len(buf) > 57600:  # 3.6 seconds at 16kHz
+                buf = buf[-57600:]
             sentinel_rolling_buffers[sess_key] = buf
             
             # Write continuous rolling buffer to disk for feature extraction
-            if len(buf) >= 32000:
+            if len(buf) >= 12000:  # >= 0.75s of audio
                 sf.write(temp_chunk_path, buf, 16000, subtype='PCM_16', format='WAV')
             
             # Sensitive Voice Activity Detection (VAD) via RMS & Peak amplitude
-            if rms >= 0.0018 or peak >= 0.012:
+            buf_rms = float(np.sqrt(np.mean(buf**2))) if len(buf) > 0 else 0.0
+            buf_peak = float(np.max(np.abs(buf))) if len(buf) > 0 else 0.0
+            active_rms = max(rms, buf_rms)
+            active_peak = max(peak, buf_peak)
+            
+            if active_rms >= 0.0018 or active_peak >= 0.012:
                 has_active_speech = True
                 img, _ = audio_to_spectrogram_image(temp_chunk_path)
                 voice_res = run_cnn_inference(img, audio_path=temp_chunk_path, transcript=transcript)

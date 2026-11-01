@@ -952,6 +952,7 @@ input[type="file"] { display: none; }
 
 .text-red { color: #f87171 !important; }
 .text-green { color: #4ade80 !important; }
+.text-blue { color: #60a5fa !important; }
 
 
 /* ==================== AUTHENTICATION & HEADER BAR ==================== */

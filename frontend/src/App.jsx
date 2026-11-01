@@ -251,6 +251,7 @@ function App() {
   const latestInterimRef = useRef('')
   const isSentinelRunningRef = useRef(false)
   const recentSlicesRef = useRef([])
+  const sentinelSessionIdRef = useRef('')
 
   // Database / History / Stats State
   const [history, setHistory] = useState([])
@@ -660,6 +661,14 @@ function App() {
       setLiveKeywords([])
       transcriptAccumulatorRef.current = ''
       recentSlicesRef.current = []
+      sentinelSessionIdRef.current = 'sess_' + Date.now()
+      setSentinelData({
+        riskScore: 0,
+        riskLevel: 'SAFE',
+        verdict: 'LISTENING (CALL SECURED)',
+        voice: 'SAMPLING',
+        intent: 'NORMAL'
+      })
 
       // 1. Call Clock Timer
       sentinelTimerRef.current = setInterval(() => {
@@ -753,7 +762,7 @@ function App() {
         }
       }
 
-      // 3. Fast Rolling 2.5-Second Acoustic & Intent Slices via continuous timeSlice
+      // 3. Ultra-Fast Rolling 1.2-Second Acoustic & Intent Slices via continuous timeSlice
       const recorder = new RecordRTC(stream, {
         type: 'audio',
         mimeType: 'audio/wav',
@@ -761,13 +770,14 @@ function App() {
         numberOfAudioChannels: 1,
         desiredSampRate: 16000,
         bufferSize: 4096,
-        timeSlice: 2500,
+        timeSlice: 1200,
         ondataavailable: async (blob) => {
           if (!isSentinelRunningRef.current || !blob || blob.size < 500) return
 
           const chunkFile = new File([blob], "slice.wav", { type: "audio/wav" })
           const fd = new FormData()
           fd.append('chunk', chunkFile)
+          fd.append('session_id', sentinelSessionIdRef.current || 'default')
           const fullSpoken = (transcriptAccumulatorRef.current + ' ' + (latestInterimRef.current || '')).trim()
           fd.append('transcript', fullSpoken)
 
@@ -780,7 +790,7 @@ function App() {
             const data = await res.json()
             if (data.status === 'success') {
               recentSlicesRef.current.push(data)
-              if (recentSlicesRef.current.length > 4) {
+              if (recentSlicesRef.current.length > 3) {
                 recentSlicesRef.current.shift()
               }
 
@@ -795,8 +805,7 @@ function App() {
 
               let smoothedScore = data.risk_score
               if (slices.length >= 2) {
-                const weights = slices.length === 2 ? [0.4, 0.6] :
-                                slices.length === 3 ? [0.2, 0.3, 0.5] : [0.1, 0.2, 0.3, 0.4]
+                const weights = slices.length === 2 ? [0.4, 0.6] : [0.2, 0.3, 0.5]
                 let weightedSum = 0
                 for (let i = 0; i < slices.length; i++) {
                   weightedSum += (slices[i].risk_score || 0) * weights[i]
@@ -857,6 +866,7 @@ function App() {
     setIsSentinelActive(false)
     isSentinelRunningRef.current = false
     recentSlicesRef.current = []
+    sentinelSessionIdRef.current = ''
     setAudioLevel(0)
     if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
     if (audioContextRef.current) {
@@ -1307,8 +1317,12 @@ function App() {
                   <div className="sentinel-mini-stats">
                     <div className="mini-stat">
                       <span>Voice Layer</span>
-                      <strong className={sentinelData.voice === 'FAKE' ? 'text-red' : 'text-green'}>
-                        {sentinelData.voice === 'FAKE' ? '🚨 Cloned Voice' : '✅ Human Voice'}
+                      <strong className={
+                        sentinelData.voice === 'FAKE' ? 'text-red' : 
+                        sentinelData.voice === 'SAMPLING' ? 'text-blue' : 'text-green'
+                      }>
+                        {sentinelData.voice === 'FAKE' ? '🚨 Cloned Voice' : 
+                         sentinelData.voice === 'SAMPLING' ? '⚡ Analyzing...' : '✅ Human Voice'}
                       </strong>
                     </div>
                     <div className="mini-stat">

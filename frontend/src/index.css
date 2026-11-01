@@ -1,0 +1,5 @@
+/* Cleared out default Vite styles to prevent conflicts with our App.css */
+body {
+  margin: 0;
+  padding: 0;
+}

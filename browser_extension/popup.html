@@ -1,0 +1,96 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>VoiceShield Sentinel</title>
+  <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+  <div class="extension-container">
+    
+    <!-- Top Header -->
+    <header class="ext-header">
+      <div class="logo-group">
+        <div class="shield-icon">🛡️</div>
+        <div>
+          <h2>VoiceShield Sentinel</h2>
+          <span class="sub-title">Telephony & Web Call Hook</span>
+        </div>
+      </div>
+      <div id="backend-status" class="status-pill checking">
+        <span class="dot"></span> <span id="status-text">Connecting...</span>
+      </div>
+    </header>
+
+    <!-- Active Tab Context -->
+    <div class="tab-target-card">
+      <span class="target-label">Target Calling Platform:</span>
+      <div class="target-details">
+        <span id="target-icon">📞</span>
+        <span id="target-name">Detecting Active Tab...</span>
+      </div>
+    </div>
+
+    <!-- Live Telephony Monitor Controls -->
+    <div class="monitor-card">
+      <div class="monitor-top">
+        <span class="hud-label">VOICE SENTINEL HUD</span>
+        <span id="call-timer" class="timer">00:00</span>
+      </div>
+
+      <!-- Real-Time Risk Score Meter -->
+      <div id="threat-banner" class="threat-banner safe">
+        <div class="score-box">
+          <span id="risk-score">0%</span>
+          <small>RISK</small>
+        </div>
+        <div class="verdict-meta">
+          <span id="threat-level" class="level-tag">MONITOR STANDBY</span>
+          <h3 id="verdict-text">Ready to Intercept Call</h3>
+        </div>
+      </div>
+
+      <!-- Live Dual-Layer Meters -->
+      <div class="dual-meters">
+        <div class="meter-col">
+          <span class="meter-title">Voice Layer (CNN)</span>
+          <strong id="voice-verdict" class="text-safe">HUMAN VOICE</strong>
+        </div>
+        <div class="meter-col">
+          <span class="meter-title">Intent Layer (NLP)</span>
+          <strong id="intent-verdict" class="text-safe">NORMAL INTENT</strong>
+        </div>
+      </div>
+
+      <!-- Live Spoken Transcript -->
+      <div class="transcript-box">
+        <span class="box-label">Live Spoken Audio:</span>
+        <p id="live-transcript" class="transcript-text">Click "Start Call Hook" to intercept audio...</p>
+      </div>
+
+      <!-- Primary Action Buttons -->
+      <div class="action-buttons">
+        <button id="toggle-hook-btn" class="primary-btn">
+          <span>🎙️ Start Call Hook</span>
+        </button>
+        <button id="inject-overlay-btn" class="outline-btn">
+          <span>📌 Toggle In-Call HUD Overlay</span>
+        </button>
+      </div>
+
+    </div>
+
+    <!-- Quick Footer -->
+    <footer class="ext-footer">
+      <button id="open-studio-btn" class="studio-link-btn">
+        🚀 Open VoiceShield Studio Dashboard
+      </button>
+      <div class="pes-badge">PES University &bull; Capstone Phase 2</div>
+    </footer>
+
+  </div>
+
+  <script src="popup.js"></script>
+</body>
+</html>

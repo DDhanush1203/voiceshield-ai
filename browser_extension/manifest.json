@@ -1,0 +1,54 @@
+{
+  "manifest_version": 3,
+  "name": "VoiceShield Live Sentinel - Telephony & Call Hook",
+  "version": "1.0.1",
+  "description": "Real-time AI Voice Deepfake & Conversational Scam Hook for WhatsApp Web, Google Meet, and Web Calls.",
+  "icons": {
+    "16": "icons/icon16.png",
+    "48": "icons/icon48.png",
+    "128": "icons/icon128.png"
+  },
+  "action": {
+    "default_popup": "popup.html",
+    "default_title": "VoiceShield Telephony Sentinel",
+    "default_icon": {
+      "16": "icons/icon16.png",
+      "48": "icons/icon48.png",
+      "128": "icons/icon128.png"
+    }
+  },
+  "permissions": [
+    "tabs",
+    "activeTab",
+    "tabCapture",
+    "storage",
+    "scripting"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:5000/*",
+    "http://localhost:5000/*",
+    "http://localhost:5173/*",
+    "http://127.0.0.1:5173/*",
+    "*://web.whatsapp.com/*",
+    "https://*/*"
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://web.whatsapp.com/*",
+        "https://meet.google.com/*",
+        "https://teams.microsoft.com/*",
+        "https://discord.com/*",
+        "https://app.zoom.us/*",
+        "http://localhost:5173/*",
+        "http://127.0.0.1:5173/*"
+      ],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_idle"
+    }
+  ]
+}

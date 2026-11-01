@@ -1,0 +1,61 @@
+# ==========================================
+# Python & Virtual Environments
+# ==========================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+.venv/
+ENV/
+*.log
+*.tmp
+
+# ==========================================
+# Large Audio Datasets (>100MB GitHub limit)
+# ==========================================
+data/
+New dataset/
+backend/temp_*.wav
+*.wav.tmp
+temp_*.wav
+test_*.wav
+test_*.png
+
+# ==========================================
+# Node.js & React Frontend
+# ==========================================
+frontend/node_modules/
+frontend/dist/
+frontend/dist-ssr/
+frontend/*.local
+.npm
+.eslintcache
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ==========================================
+# SQLite Databases & Local Session Data
+# ==========================================
+backend/*.db
+backend/*.sqlite
+backend/*.sqlite3
+
+# ==========================================
+# Duplicate Model Backups
+# ==========================================
+model_weights_old_64.pth
+
+# ==========================================
+# IDE & Operating System Files
+# ==========================================
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+ehthumbs.db

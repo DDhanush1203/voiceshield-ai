@@ -10,6 +10,11 @@ document.addEventListener('DOMContentLoaded', async () => {
   restoreState();
 
   document.getElementById('toggle-hook-btn').addEventListener('click', toggleAudioHook);
+  document.getElementById('scan-vn-btn').addEventListener('click', async () => {
+    await ensureContentScriptInjected();
+    sendMessageToActiveTab({ type: 'VOICESHIELD_SCAN_VOICE_NOTE' });
+    document.getElementById('verdict-text').textContent = 'Scanning Voice Note...';
+  });
   document.getElementById('inject-overlay-btn').addEventListener('click', toggleInCallOverlay);
   document.getElementById('open-studio-btn').addEventListener('click', () => {
     chrome.tabs.create({ url: 'http://localhost:5173/' });
@@ -126,6 +131,12 @@ function updateUIForActiveHook() {
   btn.innerHTML = '<span>⏹️ Stop Telephony Hook</span>';
   document.getElementById('threat-level').textContent = 'LIVE INTERCEPT ACTIVE';
   document.getElementById('verdict-text').textContent = 'Analyzing Voice & Intent Stream...';
+  
+  const voiceVerdict = document.getElementById('voice-verdict');
+  if (voiceVerdict) {
+    voiceVerdict.className = 'text-blue';
+    voiceVerdict.textContent = '⚡ ANALYZING VOICE...';
+  }
 }
 
 function stopHook() {
@@ -163,6 +174,8 @@ function applyTelemetryData(data) {
   const voiceVerdict = document.getElementById('voice-verdict');
   const intentVerdict = document.getElementById('intent-verdict');
   const liveTranscript = document.getElementById('live-transcript');
+  const scamBanner = document.getElementById('scam-kw-banner');
+  const scamTags = document.getElementById('scam-kw-tags');
 
   riskScore.textContent = `${data.risk_score || 0}%`;
   verdictText.textContent = data.verdict || 'SAFE CALL';
@@ -172,15 +185,18 @@ function applyTelemetryData(data) {
 
   if (data.voice === 'FAKE') {
     voiceVerdict.className = 'text-danger';
-    voiceVerdict.textContent = '🚨 SYNTHETIC AI CLONE';
+    voiceVerdict.textContent = `🚨 SYNTHETIC AI CLONE (${data.voice_conf || 80}%)`;
+  } else if (data.voice === 'SAMPLING' || data.voice === 'ANALYZING') {
+    voiceVerdict.className = 'text-blue';
+    voiceVerdict.textContent = '⚡ ANALYZING VOICE...';
   } else {
     voiceVerdict.className = 'text-safe';
-    voiceVerdict.textContent = '✅ NATURAL HUMAN VOICE';
+    voiceVerdict.textContent = `✅ NATURAL HUMAN VOICE (${data.voice_conf || 88}%)`;
   }
 
   if (data.intent === 'SCAM') {
     intentVerdict.className = 'text-danger';
-    intentVerdict.textContent = '⚠️ SCAM PATTERN DETECTED';
+    intentVerdict.textContent = `⚠️ SCAM PATTERN (${data.intent_conf || 85}%)`;
   } else {
     intentVerdict.className = 'text-safe';
     intentVerdict.textContent = '✅ NORMAL INTENT';
@@ -189,6 +205,19 @@ function applyTelemetryData(data) {
   if (data.transcript_snippet) {
     liveTranscript.textContent = `"${data.transcript_snippet}"`;
     liveTranscript.scrollTop = liveTranscript.scrollHeight;
+  }
+
+  // Display caught scam indicator keywords
+  if (scamBanner && scamTags) {
+    if (data.keywords && data.keywords.length > 0) {
+      scamBanner.style.display = 'flex';
+      scamTags.innerHTML = data.keywords
+        .map(kw => `<span class="kw-tag">${kw}</span>`)
+        .join('');
+    } else {
+      scamBanner.style.display = 'none';
+      scamTags.innerHTML = '';
+    }
   }
 }
 

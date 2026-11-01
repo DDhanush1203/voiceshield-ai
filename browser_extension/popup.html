@@ -69,10 +69,19 @@
         <p id="live-transcript" class="transcript-text">Click "Start Call Hook" to intercept audio...</p>
       </div>
 
+      <!-- Live Scam Indicators Caught in Real Time -->
+      <div id="scam-kw-banner" class="scam-kw-banner" style="display: none;">
+        <span>⚠️ Caught Scam Keywords:</span>
+        <div id="scam-kw-tags" class="kw-tags"></div>
+      </div>
+
       <!-- Primary Action Buttons -->
       <div class="action-buttons">
         <button id="toggle-hook-btn" class="primary-btn">
           <span>🎙️ Start Call Hook</span>
+        </button>
+        <button id="scan-vn-btn" class="secondary-btn">
+          <span>🔍 Scan WhatsApp Voice Note</span>
         </button>
         <button id="inject-overlay-btn" class="outline-btn">
           <span>📌 Toggle In-Call HUD Overlay</span>

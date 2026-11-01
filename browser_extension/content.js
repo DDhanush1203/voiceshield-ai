@@ -52,6 +52,12 @@
       sendResponse({ status: 'monitoring_stopped' });
     }
 
+    if (msg.type === 'VOICESHIELD_SCAN_VOICE_NOTE') {
+      expandWidget();
+      scanLatestVoiceNote();
+      sendResponse({ status: 'scanning_voice_note' });
+    }
+
     if (msg.type === 'VOICESHIELD_TELEMETRY_DATA' && msg.data) {
       applyTelemetry(msg.data);
     }

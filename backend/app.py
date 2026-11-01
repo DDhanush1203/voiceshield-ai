@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import hashlib
 import io
 import math
@@ -7,6 +8,7 @@ import base64
 import uuid
 import torch
 import librosa
+import soundfile as sf
 import numpy as np
 from flask import Flask, request, jsonify, send_file, send_from_directory
 from flask_cors import CORS
@@ -207,11 +209,17 @@ def compute_acoustic_biomarkers(audio_path, transcript=""):
         ai_phrases = ['generate your audio', 'choose me to generate', 'like my voice', 'ai voice', 'synthetic voice', 'voice clone', 'cloned voice', 'text to speech']
         is_ai_prompt = any(phrase in t_clean for phrase in ai_phrases)
         
-        # Synthetic Vocoder Indicator: Sharp vocoder cutoff, frozen pitch, AI demo prompt, or Modern Neural TTS
-        is_synthetic_vocoder = bool(rolloff < 2500 or jitter < 0.075 or is_ai_prompt or is_neural_tts)
+        # Check active vocal energy vs silence
+        rms_val = float(np.sqrt(np.mean(y_trim**2))) if len(y_trim) > 0 else 0.0
+        
+        # Vocoder cutoff only applies when there is loud voiced speech (silence/quiet pauses naturally have low rolloff)
+        is_vocoder_cutoff = bool(rolloff < 2400 and rms_val >= 0.015)
+        
+        # Synthetic Vocoder Indicator: Vocoder cutoff during active speech, frozen pitch, AI demo prompt, or Modern Neural TTS
+        is_synthetic_vocoder = bool(is_vocoder_cutoff or (jitter < 0.075 and rms_val >= 0.015) or is_ai_prompt or is_neural_tts)
         
         # Biological Human Voice Indicator: Natural vocal fold tremor and natural acoustic decay without synthetic boost
-        is_human_biology = bool(rolloff >= 2600 and jitter >= 0.10 and not is_synthetic_vocoder)
+        is_human_biology = bool(rolloff >= 2500 and jitter >= 0.08 and not is_synthetic_vocoder)
         
         if is_neural_tts:
             biomarker_fake = max(0.78, 0.50 * min(1.0, sc / 2800.0) + 0.50 * min(1.0, hf_ratio / 0.40))
@@ -450,6 +458,9 @@ def analyze_audio():
         return jsonify({"error": f"Audio analysis error: {str(e)}"}), 500
 
 # ==================== LIVE CALL SENTINEL ENDPOINT ====================
+sentinel_rolling_buffers = {}
+sentinel_buffer_timestamps = {}
+
 @app.route('/api/sentinel', methods=['POST'])
 def sentinel_stream_chunk():
     client_transcript = request.form.get('transcript', '').strip()
@@ -469,13 +480,30 @@ def sentinel_stream_chunk():
         try:
             normalize_and_save_audio(chunk_bytes, temp_chunk_path)
             
-            # Sensitive Voice Activity Detection (VAD) via RMS & Peak amplitude
-            # Supports direct speech as well as external phone speaker playback
-            y, sr = librosa.load(temp_chunk_path, sr=16000)
-            rms = float(np.sqrt(np.mean(y**2))) if len(y) > 0 else 0.0
-            peak = float(np.max(np.abs(y))) if len(y) > 0 else 0.0
+            y_chunk, sr = librosa.load(temp_chunk_path, sr=16000)
+            rms = float(np.sqrt(np.mean(y_chunk**2))) if len(y_chunk) > 0 else 0.0
+            peak = float(np.max(np.abs(y_chunk))) if len(y_chunk) > 0 else 0.0
             
-            if rms >= 0.0012 or peak >= 0.008:
+            # Maintain 5.0-second rolling buffer per session for rock-solid temporal stability
+            now = time.time()
+            sess_key = request.remote_addr or 'default'
+            
+            if sess_key not in sentinel_buffer_timestamps or (now - sentinel_buffer_timestamps[sess_key]) > 7.0:
+                sentinel_rolling_buffers[sess_key] = np.array([], dtype=np.float32)
+            sentinel_buffer_timestamps[sess_key] = now
+            
+            buf = sentinel_rolling_buffers.get(sess_key, np.array([], dtype=np.float32))
+            buf = np.concatenate([buf, y_chunk])
+            if len(buf) > 80000:  # 5.0 seconds at 16kHz
+                buf = buf[-80000:]
+            sentinel_rolling_buffers[sess_key] = buf
+            
+            # Write continuous rolling buffer to disk for feature extraction
+            if len(buf) >= 32000:
+                sf.write(temp_chunk_path, buf, 16000, subtype='PCM_16', format='WAV')
+            
+            # Sensitive Voice Activity Detection (VAD) via RMS & Peak amplitude
+            if rms >= 0.0018 or peak >= 0.012:
                 has_active_speech = True
                 img, _ = audio_to_spectrogram_image(temp_chunk_path)
                 voice_res = run_cnn_inference(img, audio_path=temp_chunk_path, transcript=transcript)
@@ -486,7 +514,7 @@ def sentinel_stream_chunk():
                 voice_pred = "REAL"
                 voice_conf = 92.0
             
-            print(f"[SENTINEL] Chunk: {len(chunk_bytes)}B | RMS: {rms:.5f} | Peak: {peak:.5f} | Speech: {has_active_speech} | Voice: {voice_pred} ({voice_conf}%) | Txt: '{transcript[:35]}'")
+            print(f"[SENTINEL] Buf: {len(buf)/16000:.1f}s | RMS: {rms:.5f} | Peak: {peak:.5f} | Speech: {has_active_speech} | Voice: {voice_pred} ({voice_conf}%) | Txt: '{transcript[:30]}'", flush=True)
         except Exception as e:
             print("Sentinel slice error:", e)
         finally:

@@ -159,24 +159,40 @@ def audio_to_fast_tensor_image(audio_path):
 def compute_acoustic_biomarkers(audio_path, transcript=""):
     """
     Computes explainable vocal forensics:
-    1. Spectral Rolloff: Vocoder high-frequency cutoff (<2500 Hz) vs Natural vocal decay (>2700 Hz).
-    2. Pitch Jitter: Fundamental frequency micro-variance (TTS vocoders <0.075, Natural vocal folds >0.11).
+    1. Spectral Rolloff & Centroid:
+       - Low Cutoff (<2500 Hz): Classical vocoder wall
+       - Natural Decay (2600 - 3600 Hz): Natural human voice through microphone
+       - Studio Boost (>3900 Hz) with high Centroid (>2300 Hz) & HF energy: Modern Neural TTS (ElevenLabs, OpenAI, VITS)
+    2. Pitch Jitter: Fundamental frequency micro-variance.
     3. Conversational AI Prompt Verification: Detects synthetic voice demo prompts.
     """
     try:
         y, sr = librosa.load(audio_path, sr=16000)
-        # Trim leading and trailing silence
-        y, _ = librosa.effects.trim(y, top_db=25)
-        
-        if len(y) < 1600:
-            return 0.5, {}
+        y_trim, _ = librosa.effects.trim(y, top_db=20)
+        if len(y_trim) < 1600:
+            y_trim = y
             
-        rolloff = float(np.mean(librosa.feature.spectral_rolloff(y=y, sr=sr, roll_percent=0.85)))
-        # Below 2400 Hz indicates vocoder cutoff wall; >3000 Hz indicates natural harmonic extension
+        rolloff = float(np.mean(librosa.feature.spectral_rolloff(y=y_trim, sr=sr, roll_percent=0.85)[0]))
+        sc = float(np.mean(librosa.feature.spectral_centroid(y=y_trim, sr=sr)[0]))
+        zcr = float(np.mean(librosa.feature.zero_crossing_rate(y=y_trim)[0]))
+        flatness = float(np.mean(librosa.feature.spectral_flatness(y=y_trim)[0]))
+        
+        # High-Frequency Energy Ratio (>3500 Hz vs <= 3500 Hz)
+        S = np.abs(librosa.stft(y_trim))
+        freqs = librosa.fft_frequencies(sr=sr)
+        hf = float(np.sum(S[freqs > 3500, :]))
+        lf = float(np.sum(S[freqs <= 3500, :]))
+        hf_ratio = hf / (lf + 1e-6)
+        
+        # Modern Neural TTS (ElevenLabs, OpenAI, VITS, Bark) Artifacts:
+        # High spectral centroid brightness combined with disproportionate HF energy or high ZCR with studio rolloff
+        is_neural_tts = bool((sc > 2300 and hf_ratio > 0.35) or (zcr > 0.21 and rolloff > 3900))
+        
+        # Below 2400 Hz indicates classical vocoder cutoff wall; >3000 Hz indicates natural harmonic extension
         rolloff_fake = 1.0 - min(1.0, max(0.0, (rolloff - 2200.0) / 1200.0))
         
         try:
-            y_yin = y[: sr * 4] if len(y) > sr * 4 else y
+            y_yin = y_trim[: sr * 4] if len(y_trim) > sr * 4 else y_trim
             f0 = librosa.yin(y_yin, fmin=60, fmax=350, sr=sr)
             voiced = f0[~np.isnan(f0)]
             jitter = float(np.std(np.diff(voiced)) / (np.mean(voiced) + 1e-6)) if len(voiced) > 10 else 0.16
@@ -185,20 +201,21 @@ def compute_acoustic_biomarkers(audio_path, transcript=""):
             
         # Jitter < 0.075 indicates synthetic AI speech; > 0.11 is natural human vocal fold vibration
         jitter_fake = 1.0 - min(1.0, max(0.0, (jitter - 0.05) / 0.09))
-        flatness = float(np.mean(librosa.feature.spectral_flatness(y=y)))
         
         # Check transcript for AI self-identifying demo phrases
         t_clean = (transcript or "").lower()
         ai_phrases = ['generate your audio', 'choose me to generate', 'like my voice', 'ai voice', 'synthetic voice', 'voice clone', 'cloned voice', 'text to speech']
         is_ai_prompt = any(phrase in t_clean for phrase in ai_phrases)
         
-        # Synthetic Vocoder Indicator: Sharp vocoder low-pass cutoff wall or frozen pitch or AI demo prompt
-        is_synthetic_vocoder = (rolloff < 2500 or jitter < 0.075 or is_ai_prompt)
+        # Synthetic Vocoder Indicator: Sharp vocoder cutoff, frozen pitch, AI demo prompt, or Modern Neural TTS
+        is_synthetic_vocoder = bool(rolloff < 2500 or jitter < 0.075 or is_ai_prompt or is_neural_tts)
         
-        # Biological Human Voice Indicator: Natural vocal fold tremor and natural harmonic extension
-        is_human_biology = (rolloff >= 2600 and jitter >= 0.10 and not is_synthetic_vocoder)
+        # Biological Human Voice Indicator: Natural vocal fold tremor and natural acoustic decay without synthetic boost
+        is_human_biology = bool(rolloff >= 2600 and jitter >= 0.10 and not is_synthetic_vocoder)
         
-        if is_synthetic_vocoder:
+        if is_neural_tts:
+            biomarker_fake = max(0.78, 0.50 * min(1.0, sc / 2800.0) + 0.50 * min(1.0, hf_ratio / 0.40))
+        elif is_synthetic_vocoder:
             biomarker_fake = max(0.75, 0.55 * rolloff_fake + 0.45 * jitter_fake)
             if is_ai_prompt:
                 biomarker_fake = 0.95
@@ -207,14 +224,26 @@ def compute_acoustic_biomarkers(audio_path, transcript=""):
         else:
             biomarker_fake = 0.50 * rolloff_fake + 0.50 * jitter_fake
         
+        # Explainable Status Strings
+        if is_neural_tts:
+            rolloff_status = f"Neural TTS Brightness ({round(sc, 1)} Hz Centroid)"
+        elif rolloff < 2500:
+            rolloff_status = "Vocoder Cutoff (<2.5kHz)"
+        else:
+            rolloff_status = "Natural Harmonic Decay"
+
+        jitter_status = "LOW (Synthetic Indicator)" if (jitter < 0.075 or is_neural_tts) else "NORMAL (Natural Human)"
+        
         return biomarker_fake, {
             "pitch_jitter": round(jitter, 4),
-            "pitch_jitter_status": "LOW (Synthetic Indicator)" if jitter < 0.10 else "NORMAL (Natural Human)",
+            "pitch_jitter_status": jitter_status,
             "spectral_rolloff": round(rolloff, 1),
-            "spectral_rolloff_status": "Vocoder Cutoff (<2.5kHz)" if rolloff < 2500 else "Natural Harmonic Decay",
+            "spectral_rolloff_status": rolloff_status,
+            "spectral_centroid": round(sc, 1),
             "spectral_flatness": round(flatness, 4),
             "is_human_biology": is_human_biology,
             "is_synthetic_vocoder": is_synthetic_vocoder,
+            "is_neural_tts": is_neural_tts,
             "is_ai_prompt": is_ai_prompt
         }
     except Exception as e:

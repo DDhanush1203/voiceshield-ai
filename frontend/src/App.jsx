@@ -1087,14 +1087,14 @@ function App() {
                           <div className="bio-mini-card">
                             <span className="bio-lbl">Pitch Jitter (F0)</span>
                             <strong>{result.acoustic_biomarkers.pitch_jitter}</strong>
-                            <small className={result.acoustic_biomarkers.pitch_jitter < 0.10 ? 'text-red' : 'text-green'}>
+                            <small className={result.acoustic_biomarkers.pitch_jitter < 0.10 || result.acoustic_biomarkers.is_neural_tts ? 'text-red' : 'text-green'}>
                               {result.acoustic_biomarkers.pitch_jitter_status}
                             </small>
                           </div>
                           <div className="bio-mini-card">
                             <span className="bio-lbl">Spectral Rolloff</span>
                             <strong>{result.acoustic_biomarkers.spectral_rolloff} Hz</strong>
-                            <small className={result.acoustic_biomarkers.spectral_rolloff < 2700 ? 'text-red' : 'text-green'}>
+                            <small className={result.acoustic_biomarkers.spectral_rolloff < 2700 || result.acoustic_biomarkers.is_neural_tts ? 'text-red' : 'text-green'}>
                               {result.acoustic_biomarkers.spectral_rolloff_status}
                             </small>
                           </div>
@@ -1104,7 +1104,12 @@ function App() {
                             ✓ Natural human vocal cord micro-fluctuations verified
                           </div>
                         )}
-                        {result.acoustic_biomarkers.is_synthetic_vocoder && (
+                        {result.acoustic_biomarkers.is_neural_tts && (
+                          <div style={{ marginTop: '8px', fontSize: '0.8rem', color: '#ef4444', fontWeight: 600 }}>
+                            ⚠ Neural TTS high-frequency synthesis & studio vocoder artifacts detected
+                          </div>
+                        )}
+                        {result.acoustic_biomarkers.is_synthetic_vocoder && !result.acoustic_biomarkers.is_neural_tts && (
                           <div style={{ marginTop: '8px', fontSize: '0.8rem', color: '#ef4444', fontWeight: 600 }}>
                             ⚠ Artificial vocoder pitch flatness & cutoff wall detected
                           </div>

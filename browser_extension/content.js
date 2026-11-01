@@ -5,17 +5,30 @@
   let rootContainer = null;
   let isExpanded = false;
   let isMonitoring = false;
+  let activeSessionId = '';
+
+  // Audio Pipeline State
+  let audioContext = null;
+  let mediaStream = null;
+  let scriptProcessor = null;
+  let audioAccumulator = [];
+  let sliceIntervalTimer = null;
+
+  // Speech Recognition State
   let speechRecognizer = null;
   let speechAccumulator = '';
   let currentSessionFinal = '';
   let restartTimeout = null;
-  let analysisDebounceTimer = null;
 
   // Local scam indicators regex for instant in-tab alerting
-  const SCAM_REGEX = /\b(otp|one time password|password|passwords|passcode|passcodes|cvv|pin|mpin|upi pin|credentials?|login details|secret code|verification code|bank account|credit card|debit card|arrest|warrant|police|digital arrest|cbi|fbi|irs|kyc|account suspended|blocked|wire transfer|gift card|crypto|urgent|immediately)\b/i;
+  const SCAM_REGEX = /\b(otp|one time password|password|passwords|passcode|passcodes|cvv|pin|mpin|upi pin|atm pin|credentials?|login details|secret code|verification code|bank account|credit card|debit card|arrest|warrant|police|digital arrest|cbi|fbi|irs|kyc|account suspended|blocked|wire transfer|gift card|crypto|urgent|act immediately)\b/i;
 
-  // Initialize immediately on page load
-  initVoiceShieldHUD();
+  // Initialize once DOM is ready
+  if (document.body) {
+    initVoiceShieldHUD();
+  } else {
+    document.addEventListener('DOMContentLoaded', initVoiceShieldHUD);
+  }
 
   // Listen for messages from popup and background service worker
   chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
@@ -44,16 +57,29 @@
     }
   });
 
+  // Automatically detect and scan WhatsApp voice messages when clicked
+  document.addEventListener('play', async (e) => {
+    if (e.target && (e.target.tagName === 'AUDIO' || e.target.tagName === 'VIDEO')) {
+      const audioEl = e.target;
+      if (audioEl.src && !audioEl._vs_scanned) {
+        audioEl._vs_scanned = true;
+        interceptWhatsAppVoiceNote(audioEl);
+      }
+    }
+  }, true);
+
   function initVoiceShieldHUD() {
+    if (document.getElementById('voiceshield-overlay-root')) return;
+
     rootContainer = document.createElement('div');
     rootContainer.id = 'voiceshield-overlay-root';
 
     // 1. Initial State: Floating Pill Trigger
     rootContainer.innerHTML = `
-      <div class="vs-pill-trigger" id="vs-trigger-btn" title="Click to open VoiceShield Telephony Sentinel HUD">
+      <div class="vs-pill-trigger" id="vs-trigger-btn" title="Click to open VoiceShield WhatsApp Sentinel HUD">
         <span class="vs-shield-glow">🛡️</span>
-        <span class="vs-pulse-indicator"></span>
-        <span id="vs-pill-label">VoiceShield | Call Sentinel</span>
+        <span class="vs-pulse-indicator" id="vs-pulse-dot"></span>
+        <span id="vs-pill-label">VoiceShield | WhatsApp Sentinel</span>
       </div>
 
       <div class="vs-widget-container" id="vs-full-card" style="display: none;">
@@ -75,7 +101,7 @@
 
           <div class="vs-threat-pill safe" id="vs-threat-pill">
             <span id="vs-verdict-title">🟢 CALL VERIFIED: SAFE</span>
-            <span class="vs-score-badge" id="vs-risk-score">12%</span>
+            <span class="vs-score-badge" id="vs-risk-score">10%</span>
           </div>
 
           <div class="vs-meters-row">
@@ -90,12 +116,15 @@
           </div>
 
           <div class="vs-transcript-box" id="vs-transcript-text">
-            Listening for VoIP call audio stream...
+            Ready. Click "Start Call Monitor" for active calls, or play any WhatsApp Voice Note to auto-scan.
           </div>
 
           <div class="vs-actions-row">
             <button class="vs-act-btn primary" id="vs-toggle-monitor-btn">
               🎙️ Start Call Monitor
+            </button>
+            <button class="vs-act-btn voice-note" id="vs-vn-scan-btn" title="Scan latest voice message playing in chat">
+              🔍 Scan Voice Note
             </button>
             <button class="vs-act-btn sim" id="vs-sim-btn" title="Simulate a scam attack on this call">
               ⚡ Test Attack
@@ -112,6 +141,7 @@
     const minBtn = document.getElementById('vs-min-btn');
     const closeBtn = document.getElementById('vs-close-btn');
     const toggleMonitorBtn = document.getElementById('vs-toggle-monitor-btn');
+    const vnScanBtn = document.getElementById('vs-vn-scan-btn');
     const simBtn = document.getElementById('vs-sim-btn');
 
     triggerBtn.addEventListener('click', expandWidget);
@@ -119,6 +149,7 @@
     closeBtn.addEventListener('click', () => { rootContainer.style.display = 'none'; });
 
     toggleMonitorBtn.addEventListener('click', toggleLiveMonitor);
+    vnScanBtn.addEventListener('click', scanLatestVoiceNote);
     simBtn.addEventListener('click', runSimulatedAttack);
 
     makeDraggable(rootContainer, document.getElementById('vs-drag-handle'));
@@ -138,21 +169,147 @@
   }
 
   // Live Speech Monitoring on WhatsApp Web
-  function toggleLiveMonitor() {
+  async function toggleLiveMonitor() {
     isMonitoring = !isMonitoring;
     const btn = document.getElementById('vs-toggle-monitor-btn');
+    const pulseDot = document.getElementById('vs-pulse-dot');
+    const pillLabel = document.getElementById('vs-pill-label');
 
     if (isMonitoring) {
+      activeSessionId = 'wa_sess_' + Date.now();
       btn.style.background = '#dc2626';
       btn.textContent = '⏹️ Stop Monitor';
+      if (pulseDot) pulseDot.style.background = '#ef4444';
+      if (pillLabel) pillLabel.textContent = '🚨 Monitoring Active';
+
+      const transcriptEl = document.getElementById('vs-transcript-text');
+      if (transcriptEl) {
+        transcriptEl.textContent = '⚡ Starting acoustic capture & AI speech decoder...';
+      }
+
+      // Set initial analyzing status
+      const voicePill = document.getElementById('vs-voice-pill');
+      if (voicePill) {
+        voicePill.textContent = '⚡ ANALYZING...';
+        voicePill.className = 'vs-sub-pill analyzing';
+      }
+
+      // 1. Start Audio Stream Capture for PyTorch CNN
+      const audioSuccess = await startAudioCapture();
+      if (!audioSuccess && transcriptEl) {
+        transcriptEl.textContent = '⚠️ Mic permission required for live call analysis. Allow mic access in Chrome site settings (lock icon in address bar).';
+      }
+
+      // 2. Start Web Speech Recognition for Captions
       startWebSpeechRecognition();
+
     } else {
+      activeSessionId = '';
       btn.style.background = '#4f46e5';
       btn.textContent = '🎙️ Start Call Monitor';
+      if (pulseDot) pulseDot.style.background = '#22c55e';
+      if (pillLabel) pillLabel.textContent = 'VoiceShield | WhatsApp Sentinel';
+
+      stopAudioCapture();
       stopWebSpeechRecognition();
     }
   }
 
+  // 1. Audio Capture Pipeline (Streams 1.2s slices to PyTorch CNN)
+  async function startAudioCapture() {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: false,
+          noiseSuppression: false,
+          autoGainControl: true,
+          sampleRate: 16000
+        }
+      });
+      mediaStream = stream;
+
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      audioContext = new AudioCtx({ sampleRate: 16000 });
+      const source = audioContext.createMediaStreamSource(stream);
+
+      // 4096 buffer size = ~256ms per audio process chunk
+      scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+      audioAccumulator = [];
+
+      scriptProcessor.onaudioprocess = (e) => {
+        if (!isMonitoring) return;
+        const inputData = e.inputBuffer.getChannelData(0);
+        audioAccumulator.push(new Float32Array(inputData));
+      };
+
+      source.connect(scriptProcessor);
+      scriptProcessor.connect(audioContext.destination);
+
+      // Package and dispatch slices every 1200ms
+      sliceIntervalTimer = setInterval(() => {
+        if (!isMonitoring || audioAccumulator.length === 0) return;
+
+        let totalLen = 0;
+        for (let i = 0; i < audioAccumulator.length; i++) {
+          totalLen += audioAccumulator[i].length;
+        }
+
+        if (totalLen < 4000) return; // avoid empty slices
+
+        const merged = new Float32Array(totalLen);
+        let offset = 0;
+        for (let i = 0; i < audioAccumulator.length; i++) {
+          merged.set(audioAccumulator[i], offset);
+          offset += audioAccumulator[i].length;
+        }
+        audioAccumulator = [];
+
+        // Encode to 16-bit PCM WAV ArrayBuffer
+        const wavBuffer = encodeWavPCM(merged, audioContext.sampleRate || 16000);
+        const base64Wav = arrayBufferToBase64(wavBuffer);
+
+        const currentSpoken = (speechAccumulator + ' ' + currentSessionFinal).trim();
+        chrome.runtime.sendMessage({
+          type: 'ANALYZE_VOIP_STREAM',
+          session_id: activeSessionId,
+          transcript: currentSpoken,
+          audioBase64: base64Wav
+        }, (res) => {
+          if (res && res.status === 'success') {
+            applyTelemetry(res);
+          }
+        });
+      }, 1200);
+
+      return true;
+    } catch (err) {
+      console.warn("Audio capture error:", err);
+      return false;
+    }
+  }
+
+  function stopAudioCapture() {
+    if (sliceIntervalTimer) {
+      clearInterval(sliceIntervalTimer);
+      sliceIntervalTimer = null;
+    }
+    if (scriptProcessor) {
+      try { scriptProcessor.disconnect(); } catch (_) {}
+      scriptProcessor = null;
+    }
+    if (audioContext) {
+      try { audioContext.close(); } catch (_) {}
+      audioContext = null;
+    }
+    if (mediaStream) {
+      try { mediaStream.getTracks().forEach(t => t.stop()); } catch (_) {}
+      mediaStream = null;
+    }
+    audioAccumulator = [];
+  }
+
+  // 2. Speech Recognition Pipeline
   function startWebSpeechRecognition() {
     const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SpeechRecognition) {
@@ -170,7 +327,7 @@
       rec.continuous = true;
       rec.interimResults = true;
       rec.maxAlternatives = 1;
-      rec.lang = navigator.language || 'en-IN';
+      rec.lang = 'en-US';
 
       rec.onresult = (e) => {
         let interim = '';
@@ -183,7 +340,6 @@
           }
         }
 
-        // Complete full transcript across all consecutive speech sessions
         const fullSpoken = (speechAccumulator + ' ' + currentSessionFinal + ' ' + interim).replace(/\s+/g, ' ').trim();
         const transcriptEl = document.getElementById('vs-transcript-text');
         if (fullSpoken && transcriptEl) {
@@ -191,7 +347,7 @@
           transcriptEl.scrollTop = transcriptEl.scrollHeight;
         }
 
-        // Immediate broadcast to background & popup HUD
+        // Live broadcast to background & popup HUD
         chrome.runtime.sendMessage({
           type: 'VOICESHIELD_LIVE_TRANSCRIPT',
           transcript: fullSpoken
@@ -205,37 +361,15 @@
             intentEl.className = 'vs-sub-pill danger';
           }
         }
-
-        // Debounced backend AI analysis (1.2s to prevent request flooding and out-of-order responses)
-        if (analysisDebounceTimer) clearTimeout(analysisDebounceTimer);
-        analysisDebounceTimer = setTimeout(() => {
-          if (fullSpoken.length > 3) {
-            chrome.runtime.sendMessage({
-              type: 'ANALYZE_VOIP_STREAM',
-              transcript: fullSpoken
-            }, (res) => {
-              if (res && res.status === 'success') {
-                applyTelemetry(res);
-              }
-            });
-          }
-        }, 1200);
       };
 
       rec.onerror = (e) => {
-        console.warn("Speech recognition notice:", e.error);
-        if (e.error === 'not-allowed' || e.error === 'service-not-allowed') {
-          isMonitoring = false;
-          const btn = document.getElementById('vs-toggle-monitor-btn');
-          if (btn) {
-            btn.style.background = '#4f46e5';
-            btn.textContent = '🎙️ Start Call Monitor';
-          }
+        if (e.error !== 'no-speech') {
+          console.warn("Speech recognition notice:", e.error);
         }
       };
 
       rec.onend = () => {
-        // Commit current session's final transcript into accumulator so words are never lost across speech pauses
         if (currentSessionFinal) {
           speechAccumulator = (speechAccumulator + ' ' + currentSessionFinal).replace(/\s+/g, ' ').trim();
           currentSessionFinal = '';
@@ -245,7 +379,7 @@
           if (restartTimeout) clearTimeout(restartTimeout);
           restartTimeout = setTimeout(() => {
             if (isMonitoring) {
-              startWebSpeechRecognition();
+              try { rec.start(); } catch (_) {}
             }
           }, 300);
         }
@@ -260,19 +394,67 @@
 
   function stopWebSpeechRecognition() {
     if (restartTimeout) clearTimeout(restartTimeout);
-    if (analysisDebounceTimer) clearTimeout(analysisDebounceTimer);
     if (speechRecognizer) {
       try { speechRecognizer.stop(); } catch (_) {}
       speechRecognizer = null;
     }
-    // Commit any lingering words
     if (currentSessionFinal) {
       speechAccumulator = (speechAccumulator + ' ' + currentSessionFinal).replace(/\s+/g, ' ').trim();
       currentSessionFinal = '';
     }
   }
 
-  // Update Telemetry Display on WhatsApp Web
+  // 3. WhatsApp Voice Note Interceptor
+  async function interceptWhatsAppVoiceNote(audioEl) {
+    const transcriptEl = document.getElementById('vs-transcript-text');
+    if (transcriptEl) {
+      transcriptEl.textContent = '⚡ Voice Note Intercepted: Performing deepfake acoustic forensic scan...';
+    }
+    expandWidget();
+
+    try {
+      if (audioEl.src) {
+        const response = await fetch(audioEl.src);
+        const blob = await response.blob();
+        
+        const reader = new FileReader();
+        reader.onloadend = () => {
+          const base64Data = reader.result;
+          chrome.runtime.sendMessage({
+            type: 'ANALYZE_VOIP_STREAM',
+            session_id: 'wa_vn_' + Date.now(),
+            transcript: speechAccumulator || 'WhatsApp Audio Message',
+            audioBase64: base64Data
+          }, (res) => {
+            if (res && res.status === 'success') {
+              applyTelemetry(res);
+              if (transcriptEl) {
+                transcriptEl.textContent = `[Voice Note Analysis] Verdict: ${res.verdict} (Risk: ${res.risk_score}%)`;
+              }
+            }
+          });
+        };
+        reader.readAsDataURL(blob);
+      }
+    } catch (err) {
+      console.warn("Voice note intercept notice:", err);
+    }
+  }
+
+  function scanLatestVoiceNote() {
+    const audios = Array.from(document.querySelectorAll('audio'));
+    if (audios.length === 0) {
+      const transcriptEl = document.getElementById('vs-transcript-text');
+      if (transcriptEl) {
+        transcriptEl.textContent = "ℹ️ No voice message currently playing in chat. Play any WhatsApp voice note, and VoiceShield will scan it.";
+      }
+      return;
+    }
+    const targetAudio = audios.find(a => !a.paused) || audios[audios.length - 1];
+    interceptWhatsAppVoiceNote(targetAudio);
+  }
+
+  // 4. Update Telemetry Display on WhatsApp Web
   function applyTelemetry(data) {
     const pill = document.getElementById('vs-threat-pill');
     const verdict = document.getElementById('vs-verdict-title');
@@ -282,32 +464,40 @@
     const pillLabel = document.getElementById('vs-pill-label');
 
     const level = (data.risk_level || 'SAFE').toLowerCase();
-    pill.className = `vs-threat-pill ${level}`;
-    score.textContent = `${data.risk_score || 0}%`;
-    verdict.textContent = `${data.verdict || 'CALL VERIFIED'}`;
+    if (pill) pill.className = `vs-threat-pill ${level}`;
+    if (score) score.textContent = `${data.risk_score || 0}%`;
+    if (verdict) verdict.textContent = `${data.verdict || 'CALL VERIFIED'}`;
 
-    if (level === 'critical' || level === 'danger') {
-      pillLabel.textContent = '🚨 DEEPFAKE THREAT DETECTED';
-      pillLabel.style.color = '#f87171';
-    } else if (level === 'high' || level === 'warn') {
-      pillLabel.textContent = '⚠️ FRAUD ALERT DETECTED';
-      pillLabel.style.color = '#facc15';
-    } else {
-      pillLabel.textContent = 'VoiceShield | WhatsApp Protected';
-      pillLabel.style.color = '#f8fafc';
+    if (pillLabel) {
+      if (level === 'critical' || level === 'danger') {
+        pillLabel.textContent = '🚨 DEEPFAKE THREAT DETECTED';
+        pillLabel.style.color = '#f87171';
+      } else if (level === 'high' || level === 'warn') {
+        pillLabel.textContent = '⚠️ FRAUD ALERT DETECTED';
+        pillLabel.style.color = '#facc15';
+      } else {
+        pillLabel.textContent = isMonitoring ? '🟢 Monitoring Active' : 'VoiceShield | WhatsApp Sentinel';
+        pillLabel.style.color = '#f8fafc';
+      }
     }
 
-    voice.textContent = data.voice === 'FAKE' ? '🚨 SYNTHETIC AI CLONE' : '✅ HUMAN VOICE';
-    voice.className = `vs-sub-pill ${data.voice === 'FAKE' ? 'danger' : 'safe'}`;
+    if (voice) {
+      voice.textContent = data.voice === 'FAKE' ? '🚨 SYNTHETIC AI CLONE' : '✅ HUMAN VOICE';
+      voice.className = `vs-sub-pill ${data.voice === 'FAKE' ? 'danger' : 'safe'}`;
+    }
 
-    intent.textContent = data.intent === 'SCAM' ? '⚠️ FRAUD / OTP PATTERN' : '✅ NORMAL INTENT';
-    intent.className = `vs-sub-pill ${data.intent === 'SCAM' ? 'danger' : 'safe'}`;
+    if (intent) {
+      intent.textContent = data.intent === 'SCAM' ? '⚠️ FRAUD / SCAM PATTERN' : '✅ NORMAL INTENT';
+      intent.className = `vs-sub-pill ${data.intent === 'SCAM' ? 'danger' : 'safe'}`;
+    }
   }
 
-  // Instant Simulation Test for Evaluators
+  // 5. Instant Simulation Test for Evaluators
   function runSimulatedAttack() {
     const transcriptEl = document.getElementById('vs-transcript-text');
-    transcriptEl.textContent = '"Sir, this is Bank Security. Your account is frozen due to fraud. Provide your 6-digit OTP code immediately to avoid legal arrest."';
+    if (transcriptEl) {
+      transcriptEl.textContent = '"Sir, this is Bank Cyber Cell. Your account is frozen due to fraud. Provide your password and 6-digit OTP code immediately to avoid legal arrest."';
+    }
 
     applyTelemetry({
       risk_level: 'CRITICAL',
@@ -315,10 +505,9 @@
       verdict: '🔴 CRITICAL THREAT: DEEPFAKE SCAM ATTACK',
       voice: 'FAKE',
       intent: 'SCAM',
-      transcript_snippet: transcriptEl.textContent
+      transcript_snippet: transcriptEl ? transcriptEl.textContent : ''
     });
 
-    // Also forward to background so popup reflects it
     chrome.runtime.sendMessage({
       type: 'BROADCAST_TELEMETRY',
       data: {
@@ -327,9 +516,60 @@
         verdict: '🔴 CRITICAL THREAT: DEEPFAKE SCAM ATTACK',
         voice: 'FAKE',
         intent: 'SCAM',
-        transcript_snippet: transcriptEl.textContent
+        transcript_snippet: transcriptEl ? transcriptEl.textContent : ''
       }
     });
+  }
+
+  // Pure JavaScript 16-bit PCM WAV Encoder
+  function encodeWavPCM(samples, sampleRate) {
+    const numChannels = 1;
+    const bitDepth = 16;
+    const bytesPerSample = bitDepth / 8;
+    const blockAlign = numChannels * bytesPerSample;
+    const dataSize = samples.length * bytesPerSample;
+    const headerSize = 44;
+    const totalSize = headerSize + dataSize;
+    const buffer = new ArrayBuffer(totalSize);
+    const view = new DataView(buffer);
+
+    function writeStr(offset, str) {
+      for (let i = 0; i < str.length; i++) {
+        view.setUint8(offset + i, str.charCodeAt(i));
+      }
+    }
+
+    writeStr(0, 'RIFF');
+    view.setUint32(4, totalSize - 8, true);
+    writeStr(8, 'WAVE');
+    writeStr(12, 'fmt ');
+    view.setUint32(16, 16, true);
+    view.setUint16(20, 1, true); // PCM format
+    view.setUint16(22, numChannels, true);
+    view.setUint32(24, sampleRate, true);
+    view.setUint32(28, sampleRate * blockAlign, true);
+    view.setUint16(32, blockAlign, true);
+    view.setUint16(34, bitDepth, true);
+    writeStr(36, 'data');
+    view.setUint32(40, dataSize, true);
+
+    let offset = 44;
+    for (let i = 0; i < samples.length; i++) {
+      const s = Math.max(-1, Math.min(1, samples[i]));
+      view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7FFF, true);
+      offset += 2;
+    }
+    return buffer;
+  }
+
+  function arrayBufferToBase64(buffer) {
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return window.btoa(binary);
   }
 
   // Draggable HUD functionality

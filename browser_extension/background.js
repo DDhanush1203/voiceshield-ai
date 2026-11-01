@@ -54,7 +54,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   // 5. Analyze VoIP Transcript or Audio Slice (Called from WhatsApp Web content.js)
   if (message.type === 'ANALYZE_VOIP_STREAM') {
-    analyzeVoipStream(message.transcript, message.audioBase64)
+    analyzeVoipStream(message.transcript, message.audioBase64, message.session_id)
       .then(result => {
         if (result && result.status === 'success') {
           result.transcript_snippet = message.transcript || result.transcript_snippet;
@@ -108,14 +108,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // Sends data to Flask Sentinel endpoint (Bypasses page CSP!)
-async function analyzeVoipStream(transcript, audioBase64) {
+async function analyzeVoipStream(transcript, audioBase64, sessionId) {
   try {
     const fd = new FormData();
     fd.append('transcript', transcript || '');
+    fd.append('session_id', sessionId || 'wa_ext_session');
 
     if (audioBase64) {
       // Convert base64 data to Blob if present
-      const byteCharacters = atob(audioBase64.split(',')[1] || audioBase64);
+      const base64Data = audioBase64.includes(',') ? audioBase64.split(',')[1] : audioBase64;
+      const byteCharacters = atob(base64Data);
       const byteNumbers = new Array(byteCharacters.length);
       for (let i = 0; i < byteCharacters.length; i++) {
         byteNumbers[i] = byteCharacters.charCodeAt(i);

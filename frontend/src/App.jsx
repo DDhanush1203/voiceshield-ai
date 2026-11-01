@@ -694,14 +694,10 @@ function App() {
         console.warn("Sentinel visualizer initialization:", audioErr)
       }
 
-      // 2. Real-Time Native Browser Speech Recognition with auto-recovery
+      // 2. Real-Time Native Browser Speech Recognition with non-blocking auto-restart
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-      const initSpeechRecognition = () => {
-        if (!isSentinelRunningRef.current || !SpeechRecognition) return
+      if (SpeechRecognition) {
         try {
-          if (recognitionRef.current) {
-            try { recognitionRef.current.abort() } catch (_) {}
-          }
           const rec = new SpeechRecognition()
           rec.continuous = true
           rec.interimResults = true
@@ -733,9 +729,8 @@ function App() {
           }
 
           rec.onerror = (e) => {
-            // Silently handle expected speech pauses
             if (e.error !== 'no-speech') {
-              console.warn("Native Web Speech API status:", e.error)
+              console.warn("Native Web Speech API:", e.error)
             }
           }
 
@@ -743,134 +738,113 @@ function App() {
             if (isSentinelRunningRef.current) {
               setTimeout(() => {
                 if (isSentinelRunningRef.current) {
-                  initSpeechRecognition()
+                  try { rec.start() } catch (err) {}
                 }
-              }, 150)
+              }, 250)
             }
           }
 
           rec.start()
           recognitionRef.current = rec
         } catch (e) {
-          console.warn("Speech recognition restart:", e)
+          console.warn("Could not start Web Speech Recognition:", e)
         }
       }
 
-      if (SpeechRecognition) {
-        initSpeechRecognition()
-      }
+      // 3. Fast Rolling 2.5-Second Acoustic & Intent Slices via continuous timeSlice
+      const recorder = new RecordRTC(stream, {
+        type: 'audio',
+        mimeType: 'audio/wav',
+        recorderType: RecordRTC.StereoAudioRecorder,
+        numberOfAudioChannels: 1,
+        desiredSampRate: 16000,
+        bufferSize: 4096,
+        timeSlice: 2500,
+        ondataavailable: async (blob) => {
+          if (!isSentinelRunningRef.current || !blob || blob.size < 500) return
 
-      // 3. Fast Rolling 2.5-Second Acoustic & Intent Slices (Zero-Gap)
-      const processSentinelSlice = () => {
-        if (!isSentinelRunningRef.current || !sentinelStreamRef.current) return
+          const chunkFile = new File([blob], "slice.wav", { type: "audio/wav" })
+          const fd = new FormData()
+          fd.append('chunk', chunkFile)
+          const fullSpoken = (transcriptAccumulatorRef.current + ' ' + (latestInterimRef.current || '')).trim()
+          fd.append('transcript', fullSpoken)
 
-        const recorder = new RecordRTC(sentinelStreamRef.current, {
-          type: 'audio',
-          mimeType: 'audio/wav',
-          recorderType: RecordRTC.StereoAudioRecorder,
-          desiredSampRate: 16000,
-          bufferSize: 4096
-        })
-
-        recorder.startRecording()
-
-        setTimeout(() => {
-          if (!isSentinelRunningRef.current) return
-          // Immediately chain next slice so no conversational gaps occur
-          processSentinelSlice()
-
-          recorder.stopRecording(async () => {
-            const blob = recorder.getBlob()
-            try { recorder.destroy() } catch (_) {}
-            const chunkFile = new File([blob], "slice.wav", { type: "audio/wav" })
-            const fd = new FormData()
-            fd.append('chunk', chunkFile)
-            const fullSpoken = (transcriptAccumulatorRef.current + ' ' + (latestInterimRef.current || '')).trim()
-            fd.append('transcript', fullSpoken)
-
-            try {
-              const res = await fetchApi('/sentinel', { 
-                method: 'POST', 
-                headers: getAuthHeaders(),
-                body: fd 
-              })
-              const data = await res.json()
-              if (data.status === 'success') {
-                // Temporal Rolling Window & Consensus Engine
-                // Keep the last 4 consecutive slices for robust temporal smoothing
-                recentSlicesRef.current.push(data)
-                if (recentSlicesRef.current.length > 4) {
-                  recentSlicesRef.current.shift()
-                }
-
-                const slices = recentSlicesRef.current
-                
-                // Voice Consensus: requires at least 2 slices to flag FAKE
-                // This prevents 1 isolated pause, cough, or mic artifact from flipping voice to FAKE
-                const fakeCount = slices.filter(s => s.voice === 'FAKE').length
-                const consolidatedVoice = fakeCount >= 2 ? 'FAKE' : 'REAL'
-
-                // Intent Consensus: If current slice or recent history flagged scam keywords
-                const scamCount = slices.filter(s => s.intent === 'SCAM').length
-                const consolidatedIntent = (scamCount >= 1 || data.intent === 'SCAM') ? 'SCAM' : 'SAFE'
-
-                // Weighted Exponential Moving Average (EMA) for smooth risk score
-                let smoothedScore = data.risk_score
-                if (slices.length >= 2) {
-                  const weights = slices.length === 2 ? [0.4, 0.6] :
-                                  slices.length === 3 ? [0.2, 0.3, 0.5] : [0.1, 0.2, 0.3, 0.4]
-                  let weightedSum = 0
-                  for (let i = 0; i < slices.length; i++) {
-                    weightedSum += (slices[i].risk_score || 0) * weights[i]
-                  }
-                  smoothedScore = Math.round(weightedSum)
-                }
-
-                // Compute unified verdict from consensus
-                let consolidatedVerdict = data.verdict
-                let consolidatedRiskLevel = data.risk_level
-
-                if (consolidatedVoice === 'FAKE' && consolidatedIntent === 'SCAM') {
-                  consolidatedVerdict = 'CRITICAL THREAT: DEEPFAKE SCAM ATTACK'
-                  consolidatedRiskLevel = 'CRITICAL'
-                  smoothedScore = Math.max(smoothedScore, 85)
-                } else if (consolidatedVoice === 'FAKE') {
-                  consolidatedVerdict = 'VOICE IMPERSONATION DETECTED'
-                  consolidatedRiskLevel = 'HIGH'
-                  smoothedScore = Math.max(smoothedScore, 65)
-                } else if (consolidatedIntent === 'SCAM') {
-                  consolidatedVerdict = 'HUMAN SOCIAL ENGINEERING SCAM'
-                  consolidatedRiskLevel = 'HIGH'
-                  smoothedScore = Math.max(smoothedScore, 50)
-                } else {
-                  // Both voice and intent are verified SAFE
-                  if (!fullSpoken && (data.verdict.includes('LISTENING') || !data.has_active_speech)) {
-                    consolidatedVerdict = 'LISTENING (CALL SECURED)'
-                    consolidatedRiskLevel = 'SAFE'
-                    smoothedScore = Math.min(smoothedScore, 10)
-                  } else {
-                    consolidatedVerdict = 'AUTHENTIC CALL (SAFE)'
-                    consolidatedRiskLevel = 'SAFE'
-                    smoothedScore = Math.min(smoothedScore, 25)
-                  }
-                }
-
-                setSentinelData({
-                  riskScore: smoothedScore,
-                  riskLevel: consolidatedRiskLevel,
-                  verdict: consolidatedVerdict,
-                  voice: consolidatedVoice,
-                  intent: consolidatedIntent
-                })
+          try {
+            const res = await fetchApi('/sentinel', { 
+              method: 'POST', 
+              headers: getAuthHeaders(),
+              body: fd 
+            })
+            const data = await res.json()
+            if (data.status === 'success') {
+              recentSlicesRef.current.push(data)
+              if (recentSlicesRef.current.length > 4) {
+                recentSlicesRef.current.shift()
               }
-            } catch (err) {
-              console.error("Sentinel slice error:", err)
-            }
-          })
-        }, 2500)
-      }
 
-      processSentinelSlice()
+              const slices = recentSlicesRef.current
+              
+              // Voice Consensus: flag FAKE if current slice or history detects synthetic voice
+              const fakeCount = slices.filter(s => s.voice === 'FAKE').length
+              const consolidatedVoice = (fakeCount >= 1 || data.voice === 'FAKE') ? 'FAKE' : 'REAL'
+
+              const scamCount = slices.filter(s => s.intent === 'SCAM').length
+              const consolidatedIntent = (scamCount >= 1 || data.intent === 'SCAM') ? 'SCAM' : 'SAFE'
+
+              let smoothedScore = data.risk_score
+              if (slices.length >= 2) {
+                const weights = slices.length === 2 ? [0.4, 0.6] :
+                                slices.length === 3 ? [0.2, 0.3, 0.5] : [0.1, 0.2, 0.3, 0.4]
+                let weightedSum = 0
+                for (let i = 0; i < slices.length; i++) {
+                  weightedSum += (slices[i].risk_score || 0) * weights[i]
+                }
+                smoothedScore = Math.round(weightedSum)
+              }
+
+              let consolidatedVerdict = data.verdict
+              let consolidatedRiskLevel = data.risk_level
+
+              if (consolidatedVoice === 'FAKE' && consolidatedIntent === 'SCAM') {
+                consolidatedVerdict = 'CRITICAL THREAT: DEEPFAKE SCAM ATTACK'
+                consolidatedRiskLevel = 'CRITICAL'
+                smoothedScore = Math.max(smoothedScore, 85)
+              } else if (consolidatedVoice === 'FAKE') {
+                consolidatedVerdict = 'VOICE IMPERSONATION DETECTED'
+                consolidatedRiskLevel = 'HIGH'
+                smoothedScore = Math.max(smoothedScore, 65)
+              } else if (consolidatedIntent === 'SCAM') {
+                consolidatedVerdict = 'HUMAN SOCIAL ENGINEERING SCAM'
+                consolidatedRiskLevel = 'HIGH'
+                smoothedScore = Math.max(smoothedScore, 50)
+              } else {
+                if (!fullSpoken && (data.verdict.includes('LISTENING') || !data.has_active_speech)) {
+                  consolidatedVerdict = 'LISTENING (CALL SECURED)'
+                  consolidatedRiskLevel = 'SAFE'
+                  smoothedScore = Math.min(smoothedScore, 10)
+                } else {
+                  consolidatedVerdict = 'AUTHENTIC CALL (SAFE)'
+                  consolidatedRiskLevel = 'SAFE'
+                  smoothedScore = Math.min(smoothedScore, 25)
+                }
+              }
+
+              setSentinelData({
+                riskScore: smoothedScore,
+                riskLevel: consolidatedRiskLevel,
+                verdict: consolidatedVerdict,
+                voice: consolidatedVoice,
+                intent: consolidatedIntent
+              })
+            }
+          } catch (err) {
+            console.error("Sentinel slice error:", err)
+          }
+        }
+      })
+
+      recorder.startRecording()
+      mediaRecorderRef.current = recorder
 
     } catch (err) {
       alert("Microphone permission denied for Sentinel: " + err.message)
@@ -890,8 +864,16 @@ function App() {
     analyserRef.current = null
     if (sentinelTimerRef.current) clearInterval(sentinelTimerRef.current)
     if (recognitionRef.current) {
-      try { recognitionRef.current.abort() } catch (e) {}
+      try {
+        recognitionRef.current.onend = null
+        recognitionRef.current.abort()
+      } catch (e) {}
       recognitionRef.current = null
+    }
+    if (mediaRecorderRef.current) {
+      try { mediaRecorderRef.current.stopRecording() } catch (_) {}
+      try { mediaRecorderRef.current.destroy() } catch (_) {}
+      mediaRecorderRef.current = null
     }
     if (sentinelStreamRef.current) {
       sentinelStreamRef.current.getTracks().forEach(t => t.stop())

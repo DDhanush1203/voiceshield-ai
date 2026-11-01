@@ -475,7 +475,7 @@ def sentinel_stream_chunk():
             rms = float(np.sqrt(np.mean(y**2))) if len(y) > 0 else 0.0
             peak = float(np.max(np.abs(y))) if len(y) > 0 else 0.0
             
-            if rms >= 0.0018 or peak >= 0.012:
+            if rms >= 0.0012 or peak >= 0.008:
                 has_active_speech = True
                 img, _ = audio_to_spectrogram_image(temp_chunk_path)
                 voice_res = run_cnn_inference(img, audio_path=temp_chunk_path, transcript=transcript)
@@ -485,6 +485,8 @@ def sentinel_stream_chunk():
                 # Silence or ambient background breathing - no vocal speech in this slice
                 voice_pred = "REAL"
                 voice_conf = 92.0
+            
+            print(f"[SENTINEL] Chunk: {len(chunk_bytes)}B | RMS: {rms:.5f} | Peak: {peak:.5f} | Speech: {has_active_speech} | Voice: {voice_pred} ({voice_conf}%) | Txt: '{transcript[:35]}'")
         except Exception as e:
             print("Sentinel slice error:", e)
         finally:

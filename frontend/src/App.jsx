@@ -14,13 +14,15 @@ const API_BASE = '/api'
 
 // Client-side instant scam vocabulary for zero-latency alerts
 const SCAM_KEYWORDS_REGEX = [
-  /\botp\b/i, /\bone time password\b/i, /\bcvv\b/i, /\bpin\b/i,
+  /\botp\b/i, /\bone time password\b/i, /\bpassword\b/i, /\bpasswords\b/i, /\bpasscode\b/i, /\bpasscodes\b/i,
+  /\bcvv\b/i, /\bpin\b/i, /\bmpin\b/i, /\bupi pin\b/i, /\batm pin\b/i, /\bsecurity code\b/i,
+  /\bcredentials?\b/i, /\blogin details\b/i, /\bsecret code\b/i, /\bverification code\b/i,
   /\bbank account\b/i, /\bcredit card\b/i, /\bdebit card\b/i,
-  /\barrest\b/i, /\bwarrant\b/i, /\bpolice\b/i, /\birs\b/i,
-  /\baccount suspended\b/i, /\baccount blocked\b/i, /\bwire transfer\b/i,
+  /\barrest\b/i, /\bwarrant\b/i, /\bpolice\b/i, /\bcbi\b/i, /\bfbi\b/i, /\birs\b/i, /\bdigital arrest\b/i,
+  /\baccount suspended\b/i, /\baccount blocked\b/i, /\bverify account\b/i, /\bwire transfer\b/i,
   /\bgift card\b/i, /\bcrypto\b/i, /\blottery\b/i, /\bcash prize\b/i,
   /\brefund\b/i, /\btech support\b/i, /\banydesk\b/i, /\bteamviewer\b/i,
-  /\bremote access\b/i, /\burgent\b/i, /\bact immediately\b/i
+  /\bremote access\b/i, /\burgent\b/i, /\bact immediately\b/i, /\bkyc\b/i
 ]
 
 // Educational Scam Tactics Dossiers

@@ -18,16 +18,18 @@ except Exception as e:
 
 # High-risk social engineering scam indicators
 SCAM_INDICATOR_KEYWORDS = [
-    r'\botp\b', r'\bone time password\b', r'\bcvv\b', r'\bpin\b',
+    r'\botp\b', r'\bone time password\b', r'\bpassword\b', r'\bpasswords\b', r'\bpasscode\b', r'\bpasscodes\b',
+    r'\bcvv\b', r'\bpin\b', r'\bmpin\b', r'\bupi pin\b', r'\batm pin\b', r'\bsecurity code\b',
+    r'\bcredentials?\b', r'\blogin details\b', r'\bsecret code\b', r'\bverification code\b',
     r'\bbank account\b', r'\bcredit card\b', r'\bdebit card\b',
-    r'\barrest\b', r'\bwarrant\b', r'\bpolice\b', r'\bfbi\b', r'\bcbi\b',
+    r'\barrest\b', r'\bwarrant\b', r'\bpolice\b', r'\bfbi\b', r'\bcbi\b', r'\bdigital arrest\b',
     r'\btax department\b', r'\bunpaid tax\b', r'\birs\b',
     r'\baccount suspended\b', r'\baccount blocked\b', r'\bverify account\b',
     r'\bwire transfer\b', r'\bwestern union\b', r'\bgift card\b', r'\bcrypto\b',
     r'\blottery\b', r'\bcash prize\b', r'\blucky draw\b', r'\bclaim prize\b',
     r'\brefund\b', r'\boverpayment\b', r'\btech support\b',
     r'\banydesk\b', r'\bteamviewer\b', r'\bremote access\b',
-    r'\bimmediately\b', r'\burgent\b', r'\bact now\b'
+    r'\bimmediately\b', r'\burgent\b', r'\bact now\b', r'\bkyc\b'
 ]
 
 def transcribe_audio(audio_path):
@@ -98,7 +100,7 @@ def analyze_conversational_intent(text):
     if len(keywords) == 0:
         prob_scam = min(prob_scam, 0.35)
         prob_legit = 1.0 - prob_scam
-    elif any(k in ['otp', 'cvv', 'arrest', 'warrant', 'pin', 'bank account', 'credit card', 'wire transfer', 'anydesk', 'teamviewer', 'gift card'] for k in keywords):
+    elif any(k in ['otp', 'password', 'passwords', 'passcode', 'passcodes', 'cvv', 'arrest', 'warrant', 'digital arrest', 'pin', 'mpin', 'credentials', 'bank account', 'credit card', 'debit card', 'wire transfer', 'anydesk', 'teamviewer', 'gift card'] for k in keywords):
         prob_scam = max(prob_scam, 0.88)
         prob_legit = 1.0 - prob_scam
 

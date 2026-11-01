@@ -12,7 +12,7 @@
   let analysisDebounceTimer = null;
 
   // Local scam indicators regex for instant in-tab alerting
-  const SCAM_REGEX = /\b(otp|one time password|cvv|pin|bank account|credit card|debit card|arrest|warrant|police|cbi|irs|kyc|account suspended|blocked|wire transfer|gift card|crypto|urgent|immediately)\b/i;
+  const SCAM_REGEX = /\b(otp|one time password|password|passwords|passcode|passcodes|cvv|pin|mpin|upi pin|credentials?|login details|secret code|verification code|bank account|credit card|debit card|arrest|warrant|police|digital arrest|cbi|fbi|irs|kyc|account suspended|blocked|wire transfer|gift card|crypto|urgent|immediately)\b/i;
 
   // Initialize immediately on page load
   initVoiceShieldHUD();

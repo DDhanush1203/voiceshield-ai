@@ -469,11 +469,13 @@ def sentinel_stream_chunk():
         try:
             normalize_and_save_audio(chunk_bytes, temp_chunk_path)
             
-            # Voice Activity Detection (VAD) via RMS
+            # Sensitive Voice Activity Detection (VAD) via RMS & Peak amplitude
+            # Supports direct speech as well as external phone speaker playback
             y, sr = librosa.load(temp_chunk_path, sr=16000)
             rms = float(np.sqrt(np.mean(y**2))) if len(y) > 0 else 0.0
+            peak = float(np.max(np.abs(y))) if len(y) > 0 else 0.0
             
-            if rms >= 0.006:
+            if rms >= 0.0018 or peak >= 0.012:
                 has_active_speech = True
                 img, _ = audio_to_spectrogram_image(temp_chunk_path)
                 voice_res = run_cnn_inference(img, audio_path=temp_chunk_path, transcript=transcript)

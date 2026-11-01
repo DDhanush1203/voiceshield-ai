@@ -640,11 +640,12 @@ function App() {
   // ==================== ULTRA-FAST LIVE CALL SENTINEL ====================
   const startSentinel = async () => {
     try {
+      // Disable echoCancellation and noiseSuppression so microphone captures external loudspeakers/phone playback cleanly
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
+          echoCancellation: false,
+          noiseSuppression: false,
           autoGainControl: true,
           sampleRate: 16000
         }
@@ -663,14 +664,49 @@ function App() {
         setSentinelTimer(prev => prev + 1)
       }, 1000)
 
-      // 2. Real-Time Zero-Latency Native Browser Speech Recognition
+      // Real-time audio analyser for Sentinel HUD
+      try {
+        const AudioCtx = window.AudioContext || window.webkitAudioContext
+        const audioCtx = new AudioCtx()
+        const analyser = audioCtx.createAnalyser()
+        analyser.fftSize = 256
+        analyser.smoothingTimeConstant = 0.3
+        const source = audioCtx.createMediaStreamSource(stream)
+        source.connect(analyser)
+        audioContextRef.current = audioCtx
+        analyserRef.current = analyser
+
+        const dataArray = new Uint8Array(analyser.frequencyBinCount)
+        const checkLevel = () => {
+          if (!analyserRef.current || !isSentinelRunningRef.current) return
+          analyserRef.current.getByteFrequencyData(dataArray)
+          let sum = 0
+          for (let i = 0; i < dataArray.length; i++) {
+            sum += dataArray[i]
+          }
+          const avg = sum / dataArray.length
+          const normalized = Math.min(100, Math.round((avg / 70) * 100))
+          setAudioLevel(normalized)
+          animFrameRef.current = requestAnimationFrame(checkLevel)
+        }
+        checkLevel()
+      } catch (audioErr) {
+        console.warn("Sentinel visualizer initialization:", audioErr)
+      }
+
+      // 2. Real-Time Native Browser Speech Recognition with auto-recovery
       const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition
-      if (SpeechRecognition) {
+      const initSpeechRecognition = () => {
+        if (!isSentinelRunningRef.current || !SpeechRecognition) return
         try {
+          if (recognitionRef.current) {
+            try { recognitionRef.current.abort() } catch (_) {}
+          }
           const rec = new SpeechRecognition()
           rec.continuous = true
           rec.interimResults = true
-          rec.lang = navigator.language || 'en-IN'
+          rec.maxAlternatives = 1
+          rec.lang = 'en-US'
 
           rec.onresult = (event) => {
             let interim = ''
@@ -697,24 +733,31 @@ function App() {
           }
 
           rec.onerror = (e) => {
-            console.warn("Native Web Speech API:", e.error)
+            // Silently handle expected speech pauses
+            if (e.error !== 'no-speech') {
+              console.warn("Native Web Speech API status:", e.error)
+            }
           }
 
           rec.onend = () => {
             if (isSentinelRunningRef.current) {
               setTimeout(() => {
                 if (isSentinelRunningRef.current) {
-                  try { rec.start() } catch (e) {}
+                  initSpeechRecognition()
                 }
-              }, 300)
+              }, 150)
             }
           }
 
           rec.start()
           recognitionRef.current = rec
         } catch (e) {
-          console.warn("Could not start Web Speech Recognition:", e)
+          console.warn("Speech recognition restart:", e)
         }
+      }
+
+      if (SpeechRecognition) {
+        initSpeechRecognition()
       }
 
       // 3. Fast Rolling 2.5-Second Acoustic & Intent Slices (Zero-Gap)
@@ -838,9 +881,17 @@ function App() {
     setIsSentinelActive(false)
     isSentinelRunningRef.current = false
     recentSlicesRef.current = []
+    setAudioLevel(0)
+    if (animFrameRef.current) cancelAnimationFrame(animFrameRef.current)
+    if (audioContextRef.current) {
+      try { audioContextRef.current.close() } catch (_) {}
+      audioContextRef.current = null
+    }
+    analyserRef.current = null
     if (sentinelTimerRef.current) clearInterval(sentinelTimerRef.current)
     if (recognitionRef.current) {
-      try { recognitionRef.current.stop() } catch (e) {}
+      try { recognitionRef.current.abort() } catch (e) {}
+      recognitionRef.current = null
     }
     if (sentinelStreamRef.current) {
       sentinelStreamRef.current.getTracks().forEach(t => t.stop())
@@ -1225,8 +1276,16 @@ function App() {
                     <div className="sentinel-status-live">
                       <span className="blinking-dot" /> LIVE MONITORING ACTIVE
                     </div>
-                    <div className="sentinel-clock">
-                      <Clock size={16} /> {formatSeconds(sentinelTimer)}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: '14px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '6px', fontSize: '0.78rem', color: '#94a3b8' }} title="Microphone Input Energy">
+                        <Mic size={14} className={audioLevel > 5 ? 'text-green' : ''} />
+                        <div style={{ width: '60px', height: '6px', background: 'rgba(255,255,255,0.1)', borderRadius: '3px', overflow: 'hidden' }}>
+                          <div style={{ width: `${audioLevel}%`, height: '100%', background: audioLevel > 5 ? '#10b981' : '#64748b', transition: 'width 0.1s ease' }} />
+                        </div>
+                      </div>
+                      <div className="sentinel-clock">
+                        <Clock size={16} /> {formatSeconds(sentinelTimer)}
+                      </div>
                     </div>
                   </div>
 

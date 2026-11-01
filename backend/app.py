@@ -234,14 +234,20 @@ def run_cnn_inference(pil_img, audio_path=None, transcript=""):
         biomarker_fake_prob, biomarkers = compute_acoustic_biomarkers(audio_path, transcript)
         
         # Multimodal fusion: Physical Vocal Biomarkers + CNN Spectrogram Deep Learning
-        if biomarkers.get("is_synthetic_vocoder"):
+        is_vocoder = biomarkers.get("is_synthetic_vocoder", False)
+        is_bio = biomarkers.get("is_human_biology", False)
+        
+        if is_vocoder:
             prob_fake = max(0.40 * raw_fake + 0.60 * biomarker_fake_prob, 0.72)
+        elif is_bio:
+            # Natural human vocal folds: Protect real speech from pause/mic artifacts
+            if raw_fake >= 0.88:
+                prob_fake = max(raw_fake, 0.70)
+            else:
+                prob_fake = min(0.30 * raw_fake + 0.70 * biomarker_fake_prob, 0.32)
         elif raw_fake >= 0.65:
             # High-confidence CNN spectrogram deepfake pattern
             prob_fake = max(raw_fake, 0.70)
-        elif biomarkers.get("is_human_biology"):
-            # Natural human vocal folds in uncertain CNN zone (e.g. microphone captures)
-            prob_fake = min(0.35 * raw_fake + 0.65 * biomarker_fake_prob, 0.30)
         else:
             prob_fake = 0.50 * raw_fake + 0.50 * biomarker_fake_prob
             
